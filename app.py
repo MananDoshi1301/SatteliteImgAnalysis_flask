@@ -4,7 +4,11 @@ import torch
 import numpy as np
 import pandas as pd
 import os
+import torchvision.transforms as transforms
 from werkzeug.utils import secure_filename
+from PIL import Image
+import segmentation_models_pytorch as smp
+import segmentation_models_pytorch.utils.metrics
 
 # Defining upload folder path
 UPLOAD_FOLDER = os.path.join('staticFiles', 'uploads')
@@ -22,6 +26,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Center crop padded image / mask to original image dims
 def crop_image(image, target_image_dims=[1500,1500,3]):
+   
     target_size = target_image_dims[0]
     image_size = len(image)
     padding = (image_size - target_size) // 2
@@ -71,8 +76,8 @@ def reverse_one_hot(image):
 def home():
     return render_template('index_upload_and_display_image.html')
 
-@app.route('/',  methods=("POST", "GET"))
-def uploadFile():
+# @app.route('/',  methods=("POST", "GET"))
+# def uploadFile():
     if request.method == 'POST':
         # Upload file flask
         uploaded_img = request.files['uploaded-file']
@@ -87,22 +92,19 @@ def uploadFile():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-  if request.method == 'POST':
-
-    # Upload file flask
-    uploaded_img = request.files['uploaded-file']
-    # Extracting uploaded data file name
-    img_filename = secure_filename(uploaded_img.filename)
-
-
-    # Upload file to database (defined uploaded folder in static path)
-    uploaded_img.save(os.path.join(app.config['UPLOAD_FOLDER'], img_filename))
-    # Storing uploaded file path in flask session
-    session['uploaded_img_file_path'] = os.path.join(app.config['UPLOAD_FOLDER'], img_filename)
-
-    img_file_path = session.get('uploaded_img_file_path', None)
-
-
+  if request.method == 'POST':    
+    file = request.files['file']
+    img_bytes = file.read()
+    my_transforms = transforms.Compose([transforms.Resize(255),
+                                        transforms.CenterCrop(224),
+                                        transforms.ToTensor(),
+                                        transforms.Normalize(
+                                            [0.485, 0.456, 0.406],
+                                            [0.229, 0.224, 0.225])])
+    image_op = Image.open(io.BytesIO(img_bytes))
+    # image_tensor = my_transforms(image_op).unsqueeze(0)
+    image_tensor = my_transforms(image_op)
+    
     # Prereq
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     select_classes = ['background', 'road']
@@ -119,13 +121,17 @@ def predict():
 
     # Preprocess in function
     # test_dataset_vis[idx][0] == ip image
-    image_vis = crop_image(test_dataset_vis[idx][0].astype('uint8'))
-    x_tensor = torch.from_numpy(image).to(DEVICE).unsqueeze(0)
+    # image_vis = crop_image(image_tensor.astype('uint8'))
+    image_vis = crop_image(np.array(image_tensor, dtype=np.uint8))
+    
+    # data = np.array(image_tensor, dtype=np.uint8)
+    # x_tensor = torch.from_numpy(image_tensor).to(DEVICE).unsqueeze(0)
+    x_tensor = torch.from_numpy(image_vis).to(DEVICE).unsqueeze(0)
 
     # Loading Model
     best_model = torch.load('./best_model.pth', map_location=DEVICE)
 
-    # Predict test image
+    # Predict test image    
     pred_mask = best_model(x_tensor)
     pred_mask = pred_mask.detach().squeeze().cpu().numpy()
 
